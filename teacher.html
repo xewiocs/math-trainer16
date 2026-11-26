@@ -549,8 +549,141 @@
         loadStudents();
       });
 
-      document.getElementById('export-btn').addEventListener('click', () => {
-        alert('Функция экспорта в Excel будет добавлена в следующей версии!');
+      // Загрузка SheetJS по требованию (один раз)
+      let sheetJsPromise = null;
+
+      function loadSheetJS() {
+        if (window.XLSX) return Promise.resolve();
+        if (sheetJsPromise) return sheetJsPromise;
+
+        sheetJsPromise = new Promise((resolve, reject) => {
+          const script = document.createElement('script');
+          script.src = 'https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js';
+          script.onload = () => resolve();
+          script.onerror = () => {
+            sheetJsPromise = null;
+            reject(new Error('Не удалось загрузить библиотеку для Excel'));
+          };
+          document.head.appendChild(script);
+        });
+
+        return sheetJsPromise;
+      }
+
+      function getExportRows(students) {
+        return students.map((student, index) => ({
+          index: index + 1,
+          name: student.name,
+          correct: student.correct,
+          wrong: student.wrong,
+          total: student.total,
+          percentage: student.percentage,
+          date: student.date,
+        }));
+      }
+
+      function getMistakeRows(students) {
+        const rows = [];
+        students.forEach((student) => {
+          (student.mistakes || []).forEach((mistake) => {
+            const num2 = String(mistake.num2).startsWith('-') ? `(${mistake.num2})` : mistake.num2;
+            rows.push({
+              name: student.name,
+              example: `${mistake.num1} ${mistake.operator} ${num2}`,
+              correctAnswer: mistake.correctAnswer,
+              userAnswer: mistake.userAnswer,
+            });
+          });
+        });
+        return rows;
+      }
+
+      function buildExportFileName() {
+        const now = new Date();
+        const pad = (n) => String(n).padStart(2, '0');
+        return `Ученики_${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}_${pad(now.getHours())}-${pad(now.getMinutes())}.xlsx`;
+      }
+
+      function exportToXlsx(students) {
+        const rows = getExportRows(students);
+
+        const dataAoa = [
+          ['#', 'Ученик', 'Правильно', 'Неправильно', 'Всего', '% успеха', 'Дата'],
+          ...rows.map((r) => [r.index, r.name, r.correct, r.wrong, r.total, r.percentage, r.date]),
+        ];
+
+        const worksheet = XLSX.utils.aoa_to_sheet(dataAoa);
+        worksheet['!cols'] = [
+          { wch: 5 },
+          { wch: 28 },
+          { wch: 12 },
+          { wch: 14 },
+          { wch: 8 },
+          { wch: 10 },
+          { wch: 20 },
+        ];
+
+        const workbook = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(workbook, worksheet, 'Ученики');
+
+        const mistakes = getMistakeRows(students);
+        if (mistakes.length > 0) {
+          const mistakesAoa = [
+            ['Ученик', 'Пример', 'Правильный ответ', 'Ответ ученика'],
+            ...mistakes.map((m) => [m.name, m.example, m.correctAnswer, m.userAnswer]),
+          ];
+          const mistakesSheet = XLSX.utils.aoa_to_sheet(mistakesAoa);
+          mistakesSheet['!cols'] = [{ wch: 28 }, { wch: 24 }, { wch: 18 }, { wch: 16 }];
+          XLSX.utils.book_append_sheet(workbook, mistakesSheet, 'Ошибки');
+        }
+
+        XLSX.writeFile(workbook, buildExportFileName());
+      }
+
+      function exportToCsv(students) {
+        const escape = (value) => {
+          const text = String(value ?? '');
+          return /[;"\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+        };
+
+        const lines = [
+          ['#', 'Ученик', 'Правильно', 'Неправильно', 'Всего', '% успеха', 'Дата'],
+          ...getExportRows(students).map((r) => [r.index, r.name, r.correct, r.wrong, r.total, r.percentage, r.date]),
+        ];
+
+        const csv = lines.map((line) => line.map(escape).join(';')).join('\r\n');
+        const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' });
+
+        const link = document.createElement('a');
+        link.href = URL.createObjectURL(blob);
+        link.download = buildExportFileName().replace(/\.xlsx$/, '.csv');
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+      }
+
+      document.getElementById('export-btn').addEventListener('click', async () => {
+        if (!studentsData || studentsData.length === 0) {
+          alert('Нет данных для экспорта. Сначала дождитесь загрузки учеников.');
+          return;
+        }
+
+        const btn = document.getElementById('export-btn');
+        const originalText = btn.textContent;
+        btn.textContent = '⏳ Экспорт...';
+        btn.disabled = true;
+
+        try {
+          await loadSheetJS();
+          exportToXlsx(studentsData);
+        } catch (e) {
+          console.warn('Excel export failed, falling back to CSV:', e);
+          exportToCsv(studentsData);
+        } finally {
+          btn.textContent = originalText;
+          btn.disabled = false;
+        }
       });
 
       document.getElementById('clear-leaderboard-btn').addEventListener('click', () => {
